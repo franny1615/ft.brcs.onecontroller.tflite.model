@@ -13,6 +13,7 @@ import threading
 DEVICE_NAME = "FT-ONE-C"
 EMG_DATA_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 STREAMING_UUID = "6d6d871d-1579-467a-9a99-b36622b79a09"
+CALIB_STATUS_UUID = "87654321-4321-4321-4321-ba0987654321"
 
 # === Buffer settings ===
 WINDOW_SIZE = 500
@@ -105,6 +106,11 @@ def notification_handler(sender, data):
         incoming_queue.append(value)
 
 
+def calib_status_handler(sender, data):
+    status = data.decode("utf-8").strip('\0')
+    print(f"Calibration Status: {status}")
+
+
 # === BLE Logic ===
 async def ble_task():
     global stop_event
@@ -129,6 +135,7 @@ async def ble_task():
         print("Connected")
 
         await client.start_notify(EMG_DATA_UUID, notification_handler)
+        await client.start_notify(CALIB_STATUS_UUID, calib_status_handler)
         print("Notifications enabled")
 
         await client.write_gatt_char(STREAMING_UUID, b"\x01")
@@ -141,6 +148,7 @@ async def ble_task():
             try:
                 await client.write_gatt_char(STREAMING_UUID, b"\x00")
                 await client.stop_notify(EMG_DATA_UUID)
+                await client.stop_notify(CALIB_STATUS_UUID)
             except Exception as e:
                 print("Cleanup error:", e)
 
