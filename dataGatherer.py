@@ -82,15 +82,12 @@ class EMGPlotter:
 
         global loop, stop_event
 
-        if loop and stop_event:
-            # Signal BLE coroutine to exit
-            loop.call_soon_threadsafe(stop_event.set)
-
-            # Give it a moment to clean up (important on macOS)
-            QtCore.QThread.msleep(100)
-
-            # Stop the loop AFTER coroutine exits
-            loop.call_soon_threadsafe(loop.stop)
+        try:
+            if loop and not loop.is_closed() and stop_event:
+                loop.call_soon_threadsafe(stop_event.set)
+        except RuntimeError:
+            # Loop already closed → safe to ignore
+            pass
 
         event.accept()
 
