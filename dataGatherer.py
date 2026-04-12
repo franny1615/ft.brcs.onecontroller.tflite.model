@@ -24,6 +24,7 @@ incoming_queue = deque(maxlen=QUEUE_MAX)
 # === Global control ===
 loop = None
 stop_event = None
+ble_thread = None
 
 
 class EMGPlotter:
@@ -86,7 +87,6 @@ class EMGPlotter:
             if loop and not loop.is_closed() and stop_event:
                 loop.call_soon_threadsafe(stop_event.set)
         except RuntimeError:
-            # Loop already closed → safe to ignore
             pass
 
         event.accept()
@@ -147,7 +147,7 @@ async def ble_task():
 
 # === Run everything ===
 def main():
-    global loop
+    global loop, ble_thread
 
     loop = asyncio.new_event_loop()
 
@@ -156,11 +156,16 @@ def main():
         try:
             loop.run_until_complete(ble_task())
         finally:
-            loop.close()  # 🔥 ensures no dangling threads
+            loop.close()
 
-    threading.Thread(target=run_loop, daemon=True).start()
+    ble_thread = threading.Thread(target=run_loop)
+    ble_thread.start()
 
     plotter.run()
+
+    # 🔥 CRITICAL: wait for BLE thread before process exits
+    print("Waiting for BLE thread to finish...")
+    ble_thread.join(timeout=2)
 
 
 if __name__ == "__main__":
