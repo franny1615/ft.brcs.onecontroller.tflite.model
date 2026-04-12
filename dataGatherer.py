@@ -17,7 +17,7 @@ STREAMING_UUID = "6d6d871d-1579-467a-9a99-b36622b79a09"
 # === Buffer settings ===
 WINDOW_SIZE = 500
 QUEUE_MAX = 5000
-# Y_AXIS_MAXIMUM = 10000 # 200000 # 1000000
+Y_AXIS_MAXIMUM = 100
 
 incoming_queue = deque(maxlen=QUEUE_MAX)
 
@@ -39,9 +39,9 @@ class EMGPlotter:
         self.plot = self.win.addPlot(title="EMG Signal")
 
         # Lock axes
-        # self.plot.setYRange(0, Y_AXIS_MAXIMUM)
+        self.plot.setYRange(0, Y_AXIS_MAXIMUM)
         self.plot.setXRange(0, WINDOW_SIZE)
-        # self.plot.enableAutoRange(False)
+        self.plot.enableAutoRange(False)
 
         self.curve = self.plot.plot(pen='y')
 
