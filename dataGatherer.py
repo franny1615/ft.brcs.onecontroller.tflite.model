@@ -1,0 +1,170 @@
+import asyncio
+import struct
+import sys
+import numpy as np
+from collections import deque
+from bleak import BleakClient, BleakScanner
+
+from PyQt6 import QtWidgets, QtCore
+import pyqtgraph as pg
+import threading
+
+# === UUIDs ===
+DEVICE_NAME = "FT-ONE-C"
+EMG_DATA_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+STREAMING_UUID = "6d6d871d-1579-467a-9a99-b36622b79a09"
+
+# === Buffer settings ===
+WINDOW_SIZE = 500
+QUEUE_MAX = 5000
+# Y_AXIS_MAXIMUM = 10000 # 200000 # 1000000
+
+incoming_queue = deque(maxlen=QUEUE_MAX)
+
+# === Global control ===
+loop = None
+stop_event = None
+
+
+class EMGPlotter:
+    def __init__(self):
+        self.app = QtWidgets.QApplication(sys.argv)
+
+        pg.setConfigOptions(useOpenGL=True)
+
+        self.win = pg.GraphicsLayoutWidget(show=True, title="Real-Time EMG")
+        self.win.closeEvent = self.on_close  # 🔥 hook close event
+
+        self.plot = self.win.addPlot(title="EMG Signal")
+
+        # Lock axes
+        # self.plot.setYRange(0, Y_AXIS_MAXIMUM)
+        self.plot.setXRange(0, WINDOW_SIZE)
+        # self.plot.enableAutoRange(False)
+
+        self.curve = self.plot.plot(pen='y')
+
+        # Circular buffer
+        self.data = np.zeros(WINDOW_SIZE, dtype=np.int32)
+        self.index = 0
+        self.full = False
+
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.update_plot)
+        self.timer.start(30)
+
+    def add_data(self, value):
+        self.data[self.index] = value
+        self.index = (self.index + 1) % WINDOW_SIZE
+
+        if self.index == 0:
+            self.full = True
+
+    def get_ordered_data(self):
+        if not self.full:
+            return self.data[:self.index]
+
+        return np.concatenate((
+            self.data[self.index:],
+            self.data[:self.index]
+        ))
+
+    def update_plot(self):
+        # Drain queue safely in UI thread
+        while incoming_queue:
+            self.add_data(incoming_queue.popleft())
+
+        self.curve.setData(self.get_ordered_data(), _callSync='off')
+
+    # 🔥 CRITICAL: clean shutdown hook
+    def on_close(self, event):
+        print("Shutting down cleanly...")
+
+        global loop, stop_event
+
+        if loop and stop_event:
+            # Signal BLE coroutine to exit
+            loop.call_soon_threadsafe(stop_event.set)
+
+            # Give it a moment to clean up (important on macOS)
+            QtCore.QThread.msleep(100)
+
+            # Stop the loop AFTER coroutine exits
+            loop.call_soon_threadsafe(loop.stop)
+
+        event.accept()
+
+    def run(self):
+        self.app.exec()
+
+
+plotter = EMGPlotter()
+
+
+# === BLE Notification Handler ===
+def notification_handler(sender, data):
+    if len(data) >= 4:
+        value = struct.unpack("<i", data[:4])[0]
+        incoming_queue.append(value)
+
+
+# === BLE Logic ===
+async def ble_task():
+    global stop_event
+    stop_event = asyncio.Event()
+
+    print("Scanning for device...")
+    device = None
+
+    devices = await BleakScanner.discover()
+    for d in devices:
+        if d.name == DEVICE_NAME:
+            device = d
+            break
+
+    if not device:
+        print("Device not found")
+        return
+
+    print(f"Connecting to {device.name} ({device.address})")
+
+    async with BleakClient(device.address) as client:
+        print("Connected")
+
+        await client.start_notify(EMG_DATA_UUID, notification_handler)
+        print("Notifications enabled")
+
+        await client.write_gatt_char(STREAMING_UUID, b"\x01")
+        print("Streaming started")
+
+        try:
+            await stop_event.wait()  # 🔥 wait for shutdown signal
+        finally:
+            print("Stopping stream...")
+            try:
+                await client.write_gatt_char(STREAMING_UUID, b"\x00")
+                await client.stop_notify(EMG_DATA_UUID)
+            except Exception as e:
+                print("Cleanup error:", e)
+
+
+# === Run everything ===
+def main():
+    global loop
+
+    loop = asyncio.new_event_loop()
+
+    def run_loop():
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(ble_task())
+        finally:
+            loop.close()  # 🔥 ensures no dangling threads
+
+    threading.Thread(target=run_loop, daemon=True).start()
+
+    plotter.run()
+
+
+if __name__ == "__main__":
+    main()
