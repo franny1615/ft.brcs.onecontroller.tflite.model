@@ -72,11 +72,14 @@ class EMGPlotter:
         ))
 
     def update_plot(self):
-        # Drain queue safely in UI thread
-        while incoming_queue:
+        # Drain queue safely in UI thread - Limit drain to avoid UI lockup
+        processed = 0
+        while incoming_queue and processed < QUEUE_MAX:
             self.add_data(incoming_queue.popleft())
+            processed += 1
 
-        self.curve.setData(self.get_ordered_data(), _callSync='off')
+        if processed > 0:
+            self.curve.setData(self.get_ordered_data(), _callSync='off')
 
     # 🔥 CRITICAL: clean shutdown hook
     def on_close(self, event):
@@ -119,38 +122,71 @@ async def ble_task():
     print("Scanning for device...")
     device = None
 
-    devices = await BleakScanner.discover()
-    for d in devices:
-        if d.name == DEVICE_NAME:
-            device = d
+    while not stop_event.is_set():
+        devices = await BleakScanner.discover(timeout=5.0)
+        for d in devices:
+            if d.name == DEVICE_NAME:
+                device = d
+                break
+        
+        if device:
             break
+        
+        print("Device not found, retrying...")
+        await asyncio.sleep(1)
 
-    if not device:
-        print("Device not found")
+    if stop_event.is_set():
         return
 
     print(f"Connecting to {device.name} ({device.address})")
 
-    async with BleakClient(device.address) as client:
-        print("Connected")
+    async def connect_and_stream():
+        disconnected_event = asyncio.Event()
 
-        await client.start_notify(EMG_DATA_UUID, notification_handler)
-        await client.start_notify(CALIB_STATUS_UUID, calib_status_handler)
-        print("Notifications enabled")
+        def disconnected_callback(client):
+            print("Disconnected callback called!")
+            disconnected_event.set()
 
-        await client.write_gatt_char(STREAMING_UUID, b"\x01")
-        print("Streaming started")
+        async with BleakClient(device.address, disconnected_callback=disconnected_callback) as client:
+            print("Connected")
 
-        try:
-            await stop_event.wait()  # 🔥 wait for shutdown signal
-        finally:
+            await client.start_notify(EMG_DATA_UUID, notification_handler)
+            await client.start_notify(CALIB_STATUS_UUID, calib_status_handler)
+            print("Notifications enabled")
+
+            await client.write_gatt_char(STREAMING_UUID, b"\x01")
+            print("Streaming started")
+
+            # Wait for either user stop or spontaneous disconnect
+            done, pending = await asyncio.wait(
+                [
+                    asyncio.create_task(stop_event.wait()),
+                    asyncio.create_task(disconnected_event.wait())
+                ],
+                return_when=asyncio.FIRST_COMPLETED
+            )
+            
+            for task in pending:
+                task.cancel()
+
             print("Stopping stream...")
             try:
-                await client.write_gatt_char(STREAMING_UUID, b"\x00")
-                await client.stop_notify(EMG_DATA_UUID)
-                await client.stop_notify(CALIB_STATUS_UUID)
+                if client.is_connected:
+                    await client.write_gatt_char(STREAMING_UUID, b"\x00")
+                    await client.stop_notify(EMG_DATA_UUID)
+                    await client.stop_notify(CALIB_STATUS_UUID)
             except Exception as e:
-                print("Cleanup error:", e)
+                print("Cleanup error (likely already disconnected):", e)
+
+    while not stop_event.is_set():
+        try:
+            await connect_and_stream()
+        except Exception as e:
+            print(f"Connection error: {e}")
+        
+        if not stop_event.is_set():
+            print("Attempting to reconnect in 3 seconds...")
+            await asyncio.sleep(3)
 
 
 # === Run everything ===
