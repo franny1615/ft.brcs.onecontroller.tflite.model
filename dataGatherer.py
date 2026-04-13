@@ -15,7 +15,7 @@ CALIB_STATUS_UUID = "87654321-4321-4321-4321-ba0987654321"
 
 # === Settings ===
 WINDOW_SIZE = 500
-REFRESH_MS = 20  # ~50 FPS
+REFRESH_MS = 1  # device sends at 1000Hz, so we need to update every ms to roughly match
 
 latest_value = 0
 value_lock = threading.Lock()
