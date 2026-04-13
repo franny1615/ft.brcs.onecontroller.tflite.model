@@ -2,7 +2,6 @@ import asyncio
 import struct
 import sys
 import numpy as np
-from collections import deque
 from bleak import BleakClient, BleakScanner
 from PyQt6 import QtWidgets, QtCore
 import pyqtgraph as pg
@@ -16,10 +15,10 @@ CALIB_STATUS_UUID = "87654321-4321-4321-4321-ba0987654321"
 
 # === Settings ===
 WINDOW_SIZE = 500
-QUEUE_MAX = 5000
-REFRESH_MS = 50  # ~50 FPS
+REFRESH_MS = 20  # ~50 FPS
 
-incoming_queue = deque(maxlen=QUEUE_MAX)
+latest_value = 0
+value_lock = threading.Lock()
 loop = None
 stop_event = None
 
@@ -53,22 +52,13 @@ class EMGPlotter(QtWidgets.QMainWindow):
         self.timer.start()
 
     def update_plot_data(self):
-        num_new = len(incoming_queue)
-        if num_new == 0:
-            return
+        global latest_value
+        with value_lock:
+            val = latest_value
 
-        # Pop all available points from the thread-safe queue
-        new_points = [incoming_queue.popleft() for _ in range(num_new)]
-        new_points = np.array(new_points, dtype=np.int32)
-
-        # Simplified "roll and replace" logic for multiple points
-        # If we have more points than our window, just take the most recent ones
-        if num_new >= WINDOW_SIZE:
-            self.y[:] = new_points[-WINDOW_SIZE:]
-        else:
-            # Roll existing data back and append new data
-            self.y = np.roll(self.y, -num_new)
-            self.y[-num_new:] = new_points
+        # Roll existing data back and append the latest value
+        self.y = np.roll(self.y, -1)
+        self.y[-1] = val
 
         # Update the graph
         self.data_line.setData(self.x, self.y)
@@ -82,9 +72,11 @@ class EMGPlotter(QtWidgets.QMainWindow):
 
 # === BLE Notification Handlers ===
 def notification_handler(sender, data):
+    global latest_value
     if len(data) >= 4:
         value = struct.unpack("<i", data[:4])[0]
-        incoming_queue.append(value)
+        with value_lock:
+            latest_value = value
 
 def calib_status_handler(sender, data):
     status = data.decode("utf-8").strip('\0')
