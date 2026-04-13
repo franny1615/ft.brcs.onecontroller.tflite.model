@@ -46,40 +46,34 @@ class EMGPlotter:
 
         self.curve = self.plot.plot(pen='y')
 
-        # Circular buffer
+        # Buffer for plotting
         self.data = np.zeros(WINDOW_SIZE, dtype=np.int32)
-        self.index = 0
-        self.full = False
 
         self.timer = QtCore.QTimer()
         self.timer.timeout.connect(self.update_plot)
-        self.timer.start(30)
-
-    def add_data(self, value):
-        self.data[self.index] = value
-        self.index = (self.index + 1) % WINDOW_SIZE
-
-        if self.index == 0:
-            self.full = True
-
-    def get_ordered_data(self):
-        if not self.full:
-            return self.data[:self.index]
-
-        return np.concatenate((
-            self.data[self.index:],
-            self.data[:self.index]
-        ))
+        self.timer.start(16)  # ~60 FPS for smoother visuals
 
     def update_plot(self):
-        # Drain queue safely in UI thread - Limit drain to avoid UI lockup
-        processed = 0
-        while incoming_queue and processed < QUEUE_MAX:
-            self.add_data(incoming_queue.popleft())
-            processed += 1
+        # Drain all available data from the queue in the UI thread
+        num_items = len(incoming_queue)
+        if num_items == 0:
+            return
 
-        if processed > 0:
-            self.curve.setData(self.get_ordered_data(), _callSync='off')
+        # Pop items from the thread-safe deque
+        new_data = [incoming_queue.popleft() for _ in range(num_items)]
+        new_data = np.array(new_data, dtype=np.int32)
+
+        # Update the rolling data buffer
+        if num_items >= WINDOW_SIZE:
+            # If we got more data than the window size, just take the last part
+            self.data[:] = new_data[-WINDOW_SIZE:]
+        else:
+            # Shift old data and append new
+            self.data[:-num_items] = self.data[num_items:]
+            self.data[-num_items:] = new_data
+
+        # Update the plot efficiently
+        self.curve.setData(self.data, skipFiniteCheck=True)
 
     # 🔥 CRITICAL: clean shutdown hook
     def on_close(self, event):
@@ -107,6 +101,8 @@ def notification_handler(sender, data):
     if len(data) >= 4:
         value = struct.unpack("<i", data[:4])[0]
         incoming_queue.append(value)
+        if value > 100:
+            print(f"Received value: {value}")
 
 
 def calib_status_handler(sender, data):
