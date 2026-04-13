@@ -14,8 +14,8 @@ STREAMING_UUID = "6d6d871d-1579-467a-9a99-b36622b79a09"
 CALIB_STATUS_UUID = "87654321-4321-4321-4321-ba0987654321"
 
 # === Settings ===
-WINDOW_SIZE = 500
-REFRESH_MS = 1  # device sends at 1000Hz, so we need to update every ms to roughly match
+WINDOW_SIZE = 1000
+REFRESH_MS = 16  # ~60 FPS
 
 latest_value = 0
 value_lock = threading.Lock()
@@ -67,6 +67,7 @@ class EMGPlotter(QtWidgets.QMainWindow):
         print("Shutting down cleanly...")
         global loop, stop_event
         if loop and stop_event:
+            # Signal the ble_task to stop
             loop.call_soon_threadsafe(stop_event.set)
         event.accept()
 
@@ -146,10 +147,19 @@ def main():
         finally:
             loop.close()
 
-    ble_thread = threading.Thread(target=run_loop, daemon=True)
+    ble_thread = threading.Thread(target=run_loop, daemon=False)
     ble_thread.start()
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    
+    # Ensure the thread finishes before the process exits
+    if ble_thread.is_alive():
+        # Set stop_event just in case it wasn't set through UI
+        if loop and stop_event:
+            loop.call_soon_threadsafe(stop_event.set)
+        ble_thread.join(timeout=2.0)
+        
+    sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()
