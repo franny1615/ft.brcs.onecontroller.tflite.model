@@ -11,25 +11,45 @@ class EMGPlotter(QtWidgets.QMainWindow):
     def __init__(self, data_source):
         super().__init__()
         self.data_source = data_source
-        self.setWindowTitle("Real-Time EMG Plot")
+        self.setWindowTitle("Real-Time EMG and Raw Envelope Plot")
 
-        # Configure graph
-        self.graphWidget = pg.PlotWidget()
-        self.setCentralWidget(self.graphWidget)
-        self.graphWidget.setBackground("w")
-        self.graphWidget.setTitle("EMG Signal", color="k", size="14pt")
-        self.graphWidget.setLabel("left", "Amplitude")
-        self.graphWidget.setLabel("bottom", "Samples")
-        self.graphWidget.showGrid(x=True, y=True)
-        self.graphWidget.setYRange(0, 100)
+        # Create a central layout
+        central_widget = QtWidgets.QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QtWidgets.QVBoxLayout(central_widget)
+
+        # Configure EMG graph
+        self.emgWidget = pg.PlotWidget()
+        layout.addWidget(self.emgWidget)
+        self.emgWidget.setBackground("w")
+        self.emgWidget.setTitle("EMG Signal (Filtered)", color="k", size="14pt")
+        self.emgWidget.setLabel("left", "Amplitude")
+        self.emgWidget.setLabel("bottom", "Samples")
+        self.emgWidget.showGrid(x=True, y=True)
+        self.emgWidget.setYRange(0, 100)
+
+        # Configure Raw Envelope graph
+        self.rawWidget = pg.PlotWidget()
+        layout.addWidget(self.rawWidget)
+        self.rawWidget.setBackground("w")
+        self.rawWidget.setTitle("Raw Envelope", color="k", size="14pt")
+        self.rawWidget.setLabel("left", "Amplitude")
+        self.rawWidget.setLabel("bottom", "Samples")
+        self.rawWidget.showGrid(x=True, y=True)
+        # Enable auto-scaling for raw as it might vary more
+        self.rawWidget.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
         # Initialize data
         self.x = np.arange(WINDOW_SIZE)
-        self.y = np.zeros(WINDOW_SIZE, dtype=np.int32)
+        self.y_emg = np.zeros(WINDOW_SIZE, dtype=np.int32)
+        self.y_raw = np.zeros(WINDOW_SIZE, dtype=np.int32)
 
-        # Plot line
-        pen = pg.mkPen(color=(255, 0, 0), width=1)
-        self.data_line = self.graphWidget.plot(self.x, self.y, pen=pen)
+        # Plot lines
+        pen_emg = pg.mkPen(color=(255, 0, 0), width=1)
+        self.emg_data_line = self.emgWidget.plot(self.x, self.y_emg, pen=pen_emg)
+
+        pen_raw = pg.mkPen(color=(0, 0, 255), width=1)
+        self.raw_data_line = self.rawWidget.plot(self.x, self.y_raw, pen=pen_raw)
 
         # Update timer
         self.timer = QtCore.QTimer()
@@ -39,14 +59,18 @@ class EMGPlotter(QtWidgets.QMainWindow):
 
     def update_plot_data(self):
         with self.data_source.value_lock:
-            val = self.data_source.latest_value
+            val_emg = self.data_source.latest_value
+            val_raw = self.data_source.latest_raw_value
 
-        # Roll existing data back and append the latest value
-        self.y = np.roll(self.y, -1)
-        self.y[-1] = val
+        # Update EMG data
+        self.y_emg = np.roll(self.y_emg, -1)
+        self.y_emg[-1] = val_emg
+        self.emg_data_line.setData(self.x, self.y_emg)
 
-        # Update the graph
-        self.data_line.setData(self.x, self.y)
+        # Update Raw data
+        self.y_raw = np.roll(self.y_raw, -1)
+        self.y_raw[-1] = val_raw
+        self.raw_data_line.setData(self.x, self.y_raw)
 
     def closeEvent(self, event):
         print("Shutting down cleanly...")

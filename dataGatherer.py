@@ -7,6 +7,7 @@ from bleConnector import ble_task
 
 # === Shared State ===
 latest_value = 0
+latest_raw_value = 0
 value_lock = threading.Lock()
 stop_event = None
 loop = None

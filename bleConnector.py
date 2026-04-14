@@ -5,6 +5,7 @@ from bleak import BleakClient, BleakScanner
 # === UUIDs ===
 DEVICE_NAME = "FT-ONE-C"
 EMG_DATA_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+RAW_ENVELOPE_UUID = "43218765-4321-4321-4321-1234567890cd"
 STREAMING_UUID = "6d6d871d-1579-467a-9a99-b36622b79a09"
 CALIB_STATUS_UUID = "87654321-4321-4321-4321-ba0987654321"
 
@@ -14,6 +15,12 @@ def notification_handler(sender, data, data_source):
         value = struct.unpack("<i", data[:4])[0]
         with data_source.value_lock:
             data_source.latest_value = value
+
+def raw_envelope_handler(sender, data, data_source):
+    if len(data) >= 4:
+        value = struct.unpack("<i", data[:4])[0]
+        with data_source.value_lock:
+            data_source.latest_raw_value = value
 
 def calib_status_handler(sender, data):
     status = data.decode("utf-8").strip('\0')
@@ -42,7 +49,9 @@ async def ble_task(data_source):
             print("Connected")
             # Partial binding for the data_source
             handler = lambda s, d: notification_handler(s, d, data_source)
+            raw_handler = lambda s, d: raw_envelope_handler(s, d, data_source)
             await client.start_notify(EMG_DATA_UUID, handler)
+            await client.start_notify(RAW_ENVELOPE_UUID, raw_handler)
             await client.start_notify(CALIB_STATUS_UUID, calib_status_handler)
             await client.write_gatt_char(STREAMING_UUID, b"\x01")
             print("Streaming started")
